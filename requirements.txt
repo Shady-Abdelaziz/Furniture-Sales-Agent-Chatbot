@@ -5,3 +5,6 @@ pdfplumber
 faiss-cpu
 langdetect
 python-dotenv
+sentence-transformers
+huggingface-hub
+requests
