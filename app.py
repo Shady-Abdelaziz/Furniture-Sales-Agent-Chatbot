@@ -1,31 +1,39 @@
 import streamlit as st
 from langchain_community.document_loaders import PDFPlumberLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import OllamaEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_community.llms import Ollama
+from langchain_community.llms import HuggingFaceHub
 from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
 from langchain.prompts import PromptTemplate
 from langdetect import detect
 import os
 import pickle
+import requests
 
-# Use environment variables or default paths for cloud deployment
-PDF_PATH = os.getenv('PDF_PATH', '1561986011.General Catalogue.pdf')
-VECTORSTORE_PATH = os.getenv('VECTORSTORE_PATH', '.cache/vectorstore.pkl')
-DOCS_CACHE_PATH = os.getenv('DOCS_CACHE_PATH', '.cache/docs_cache.pkl')
+# Constants
+PDF_URL = "https://raw.githubusercontent.com/Shady-Abdelaziz/Sales-Agent/main/1561986011.General%20Catalogue.pdf"
+PDF_PATH = "catalog.pdf"
+VECTORSTORE_PATH = '.cache/vectorstore.pkl'
+DOCS_CACHE_PATH = '.cache/docs_cache.pkl'
 
 # Ensure cache directory exists
-os.makedirs(os.path.dirname(VECTORSTORE_PATH), exist_ok=True)
-os.makedirs(os.path.dirname(DOCS_CACHE_PATH), exist_ok=True)
+os.makedirs('.cache', exist_ok=True)
+
+# Download PDF if not exists
+def download_pdf():
+    if not os.path.exists(PDF_PATH):
+        response = requests.get(PDF_URL)
+        with open(PDF_PATH, 'wb') as f:
+            f.write(response.content)
 
 @st.cache_resource
 def get_embeddings():
     """Initialize and cache embeddings model."""
     try:
-        return OllamaEmbeddings(
-            model="nextfire/paraphrase-multilingual-minilm:l12-v2"
+        return HuggingFaceEmbeddings(
+            model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
         )
     except Exception as e:
         st.error(f"Error initializing embeddings: {str(e)}")
@@ -35,7 +43,12 @@ def get_embeddings():
 def get_llm():
     """Initialize and cache LLM."""
     try:
-        return Ollama(model="aya-expanse:8b")
+        huggingface_api_key = st.secrets["HUGGINGFACE_API_KEY"]
+        return HuggingFaceHub(
+            repo_id="google/flan-t5-large",
+            huggingfacehub_api_token=huggingface_api_key,
+            model_kwargs={"temperature": 0.7}
+        )
     except Exception as e:
         st.error(f"Error initializing LLM: {str(e)}")
         return None
@@ -47,9 +60,8 @@ def load_or_process_documents():
             with open(DOCS_CACHE_PATH, 'rb') as f:
                 return pickle.load(f)
         
-        if not os.path.exists(PDF_PATH):
-            st.error(f"PDF file not found at {PDF_PATH}")
-            return None
+        # Ensure PDF is downloaded
+        download_pdf()
         
         loader = PDFPlumberLoader(PDF_PATH)
         docs = loader.load()
@@ -61,7 +73,6 @@ def load_or_process_documents():
         )
         documents = text_splitter.split_documents(docs)
         
-        os.makedirs(os.path.dirname(DOCS_CACHE_PATH), exist_ok=True)
         with open(DOCS_CACHE_PATH, 'wb') as f:
             pickle.dump(documents, f)
         
@@ -82,7 +93,6 @@ def load_or_create_vectorstore(documents, embeddings):
             
         vector_store = FAISS.from_documents(documents, embeddings)
         
-        os.makedirs(os.path.dirname(VECTORSTORE_PATH), exist_ok=True)
         with open(VECTORSTORE_PATH, 'wb') as f:
             pickle.dump(vector_store, f)
         
@@ -174,15 +184,6 @@ def main():
 
     if "messages" not in st.session_state:
         st.session_state.messages = []
-
-    # File uploader for PDF
-    uploaded_file = st.file_uploader("Upload your product catalog (PDF)", type="pdf")
-    if uploaded_file:
-        # Save uploaded file
-        os.makedirs('data', exist_ok=True)
-        with open(PDF_PATH, 'wb') as f:
-            f.write(uploaded_file.getvalue())
-        st.success("Catalog uploaded successfully!")
 
     # Initialize QA chain with caching
     with st.spinner("Loading the system..."):
