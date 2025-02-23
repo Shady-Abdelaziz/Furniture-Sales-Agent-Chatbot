@@ -11,72 +11,103 @@ from langdetect import detect
 import os
 import pickle
 
-# Fixed paths
-PDF_PATH = r"C:\Users\rtr\Desktop\salesagent\1561986011.General Catalogue.pdf"
-VECTORSTORE_PATH = "vectorstore.pkl"
-DOCS_CACHE_PATH = "docs_cache.pkl"
+# Use environment variables or default paths for cloud deployment
+PDF_PATH = os.getenv('PDF_PATH', '1561986011.General Catalogue.pdf')
+VECTORSTORE_PATH = os.getenv('VECTORSTORE_PATH', '.cache/vectorstore.pkl')
+DOCS_CACHE_PATH = os.getenv('DOCS_CACHE_PATH', '.cache/docs_cache.pkl')
+
+# Ensure cache directory exists
+os.makedirs(os.path.dirname(VECTORSTORE_PATH), exist_ok=True)
+os.makedirs(os.path.dirname(DOCS_CACHE_PATH), exist_ok=True)
 
 @st.cache_resource
 def get_embeddings():
     """Initialize and cache embeddings model."""
-    return OllamaEmbeddings(
-        model="nextfire/paraphrase-multilingual-minilm:l12-v2"
-    )
+    try:
+        return OllamaEmbeddings(
+            model="nextfire/paraphrase-multilingual-minilm:l12-v2"
+        )
+    except Exception as e:
+        st.error(f"Error initializing embeddings: {str(e)}")
+        return None
 
 @st.cache_resource
 def get_llm():
     """Initialize and cache LLM."""
-    return Ollama(model="aya-expanse:8b")
+    try:
+        return Ollama(model="aya-expanse:8b")
+    except Exception as e:
+        st.error(f"Error initializing LLM: {str(e)}")
+        return None
 
 def load_or_process_documents():
     """Load documents from cache or process them if cache doesn't exist."""
-    if os.path.exists(DOCS_CACHE_PATH):
-        with open(DOCS_CACHE_PATH, 'rb') as f:
-            return pickle.load(f)
-    
-    loader = PDFPlumberLoader(PDF_PATH)
-    docs = loader.load()
-    
-    # Use RecursiveCharacterTextSplitter instead of SemanticChunker for better performance
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200,
-        length_function=len
-    )
-    documents = text_splitter.split_documents(docs)
-    
-    # Cache the processed documents
-    with open(DOCS_CACHE_PATH, 'wb') as f:
-        pickle.dump(documents, f)
-    
-    return documents
+    try:
+        if os.path.exists(DOCS_CACHE_PATH):
+            with open(DOCS_CACHE_PATH, 'rb') as f:
+                return pickle.load(f)
+        
+        if not os.path.exists(PDF_PATH):
+            st.error(f"PDF file not found at {PDF_PATH}")
+            return None
+        
+        loader = PDFPlumberLoader(PDF_PATH)
+        docs = loader.load()
+        
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=200,
+            length_function=len
+        )
+        documents = text_splitter.split_documents(docs)
+        
+        os.makedirs(os.path.dirname(DOCS_CACHE_PATH), exist_ok=True)
+        with open(DOCS_CACHE_PATH, 'wb') as f:
+            pickle.dump(documents, f)
+        
+        return documents
+    except Exception as e:
+        st.error(f"Error processing documents: {str(e)}")
+        return None
 
 def load_or_create_vectorstore(documents, embeddings):
     """Load vectorstore from disk or create if it doesn't exist."""
-    if os.path.exists(VECTORSTORE_PATH):
-        with open(VECTORSTORE_PATH, 'rb') as f:
-            vector_store = pickle.load(f)
-    else:
+    try:
+        if os.path.exists(VECTORSTORE_PATH):
+            with open(VECTORSTORE_PATH, 'rb') as f:
+                return pickle.load(f)
+        
+        if documents is None or embeddings is None:
+            return None
+            
         vector_store = FAISS.from_documents(documents, embeddings)
+        
+        os.makedirs(os.path.dirname(VECTORSTORE_PATH), exist_ok=True)
         with open(VECTORSTORE_PATH, 'wb') as f:
             pickle.dump(vector_store, f)
-    
-    return vector_store
+        
+        return vector_store
+    except Exception as e:
+        st.error(f"Error with vector store: {str(e)}")
+        return None
 
 @st.cache_resource
 def initialize_system():
     """Initialize the system with caching for better performance."""
-    # Get cached embeddings
     embeddings = get_embeddings()
-    
-    # Load or process documents
+    if embeddings is None:
+        return None
+        
     documents = load_or_process_documents()
-    
-    # Load or create vectorstore
+    if documents is None:
+        return None
+        
     vector_store = load_or_create_vectorstore(documents, embeddings)
+    if vector_store is None:
+        return None
+        
     retriever = vector_store.as_retriever(search_kwargs={"k": 7})
 
-    # Setup prompt template
     prompt_template = """
     You are a warm, helpful, and professional sales assistant specialized in furniture product details.
     Use only the context below to answer the customer's question.
@@ -101,7 +132,6 @@ def initialize_system():
         template=prompt_template
     )
 
-    # Initialize memory
     memory = ConversationBufferMemory(
         memory_key="chat_history",
         input_key="question",
@@ -109,10 +139,10 @@ def initialize_system():
         return_messages=True
     )
 
-    # Get cached LLM
     llm = get_llm()
+    if llm is None:
+        return None
 
-    # Create the ConversationalRetrievalChain
     qa_chain = ConversationalRetrievalChain.from_llm(
         llm=llm,
         retriever=retriever,
@@ -142,14 +172,25 @@ def main():
     st.title("🛋️ Multilingual Furniture Sales Assistant")
     st.write("Ask questions about our furniture products in English or Arabic!")
 
-    # Initialize session state
     if "messages" not in st.session_state:
         st.session_state.messages = []
+
+    # File uploader for PDF
+    uploaded_file = st.file_uploader("Upload your product catalog (PDF)", type="pdf")
+    if uploaded_file:
+        # Save uploaded file
+        os.makedirs('data', exist_ok=True)
+        with open(PDF_PATH, 'wb') as f:
+            f.write(uploaded_file.getvalue())
+        st.success("Catalog uploaded successfully!")
 
     # Initialize QA chain with caching
     with st.spinner("Loading the system..."):
         try:
             qa_chain = initialize_system()
+            if qa_chain is None:
+                st.error("Failed to initialize the system. Please check the logs.")
+                st.stop()
         except Exception as e:
             st.error(f"Error initializing system: {str(e)}")
             st.stop()
@@ -161,12 +202,10 @@ def main():
 
     # Chat input
     if prompt := st.chat_input("Ask about our furniture products..."):
-        # Display user message
         with st.chat_message("user"):
             st.write(prompt)
         st.session_state.messages.append({"role": "user", "content": prompt})
 
-        # Generate and display assistant response
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 try:
