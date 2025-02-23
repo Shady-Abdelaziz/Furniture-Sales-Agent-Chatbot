@@ -1,7 +1,7 @@
 streamlit
 langchain
-langchain_community
-langchain_experimental
-faiss-cpu
+langchain-community
 pdfplumber
+faiss-cpu
 langdetect
+python-dotenv
