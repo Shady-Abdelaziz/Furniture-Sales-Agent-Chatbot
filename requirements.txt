@@ -1,0 +1,7 @@
+streamlit
+langchain
+langchain_community
+langchain_experimental
+faiss-cpu
+pdfplumber
+langdetect
