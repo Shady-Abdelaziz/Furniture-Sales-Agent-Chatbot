@@ -1,10 +1,8 @@
 streamlit
-langchain
 langchain-community
+langchain-experimental
+langdetect
 pdfplumber
 faiss-cpu
-langdetect
-python-dotenv
-sentence-transformers
-huggingface-hub
-requests
+ollama
+pickle

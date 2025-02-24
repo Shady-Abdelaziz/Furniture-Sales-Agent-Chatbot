@@ -1,125 +1,83 @@
 import streamlit as st
 from langchain_community.document_loaders import PDFPlumberLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_experimental.text_splitter import SemanticChunker
+from langchain_community.embeddings import OllamaEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_community.llms import HuggingFaceHub
+from langchain_community.llms import Ollama
 from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
 from langchain.prompts import PromptTemplate
 from langdetect import detect
 import os
 import pickle
-import requests
 
-# Constants
-PDF_URL = "https://raw.githubusercontent.com/Shady-Abdelaziz/Sales-Agent/main/1561986011.General%20Catalogue.pdf"
-PDF_PATH = "catalog.pdf"
-VECTORSTORE_PATH = '.cache/vectorstore.pkl'
-DOCS_CACHE_PATH = '.cache/docs_cache.pkl'
-
-# Ensure cache directory exists
-os.makedirs('.cache', exist_ok=True)
-
-# Download PDF if not exists
-def download_pdf():
-    if not os.path.exists(PDF_PATH):
-        response = requests.get(PDF_URL)
-        with open(PDF_PATH, 'wb') as f:
-            f.write(response.content)
+# Fixed paths
+PDF_PATH = r"C:\Users\rtr\Desktop\salesagent\1561986011.General Catalogue.pdf"
+VECTORSTORE_PATH = "vectorstore.pkl"
+DOCS_CACHE_PATH = "docs_cache.pkl"
 
 @st.cache_resource
 def get_embeddings():
     """Initialize and cache embeddings model."""
-    try:
-        return HuggingFaceEmbeddings(
-            model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-        )
-    except Exception as e:
-        st.error(f"Error initializing embeddings: {str(e)}")
-        return None
+    return OllamaEmbeddings(
+        model="nomic-embed-text:latest"
+    )
 
 @st.cache_resource
 def get_llm():
     """Initialize and cache LLM."""
-    try:
-        huggingface_api_key = st.secrets["HUGGINGFACE_API_KEY"]
-        return HuggingFaceHub(
-            repo_id="google/flan-t5-large",
-            huggingfacehub_api_token=huggingface_api_key,
-            model_kwargs={"temperature": 0.7}
-        )
-    except Exception as e:
-        st.error(f"Error initializing LLM: {str(e)}")
-        return None
+    return Ollama(model="aya-expanse:8b")
 
 def load_or_process_documents():
     """Load documents from cache or process them if cache doesn't exist."""
-    try:
-        if os.path.exists(DOCS_CACHE_PATH):
-            with open(DOCS_CACHE_PATH, 'rb') as f:
-                return pickle.load(f)
-        
-        # Ensure PDF is downloaded
-        download_pdf()
-        
-        loader = PDFPlumberLoader(PDF_PATH)
-        docs = loader.load()
-        
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200,
-            length_function=len
-        )
-        documents = text_splitter.split_documents(docs)
-        
-        with open(DOCS_CACHE_PATH, 'wb') as f:
-            pickle.dump(documents, f)
-        
-        return documents
-    except Exception as e:
-        st.error(f"Error processing documents: {str(e)}")
-        return None
+    if os.path.exists(DOCS_CACHE_PATH):
+        with open(DOCS_CACHE_PATH, 'rb') as f:
+            return pickle.load(f)
+    
+    loader = PDFPlumberLoader(PDF_PATH)
+    docs = loader.load()
+    
+    # Use SemanticChunker with correct parameters
+    embeddings = get_embeddings()
+    text_splitter = SemanticChunker(
+        embeddings=embeddings,min_chunk_size= 1000
+    )
+    documents = text_splitter.split_documents(docs)
+    
+    # Cache the processed documents
+    with open(DOCS_CACHE_PATH, 'wb') as f:
+        pickle.dump(documents, f)
+    
+    return documents
 
 def load_or_create_vectorstore(documents, embeddings):
     """Load vectorstore from disk or create if it doesn't exist."""
-    try:
-        if os.path.exists(VECTORSTORE_PATH):
-            with open(VECTORSTORE_PATH, 'rb') as f:
-                return pickle.load(f)
-        
-        if documents is None or embeddings is None:
-            return None
-            
+    if os.path.exists(VECTORSTORE_PATH):
+        with open(VECTORSTORE_PATH, 'rb') as f:
+            vector_store = pickle.load(f)
+    else:
         vector_store = FAISS.from_documents(documents, embeddings)
-        
         with open(VECTORSTORE_PATH, 'wb') as f:
             pickle.dump(vector_store, f)
-        
-        return vector_store
-    except Exception as e:
-        st.error(f"Error with vector store: {str(e)}")
-        return None
+    
+    return vector_store
 
 @st.cache_resource
 def initialize_system():
     """Initialize the system with caching for better performance."""
+    # Get cached embeddings
     embeddings = get_embeddings()
-    if embeddings is None:
-        return None
-        
+    
+    # Load or process documents
     documents = load_or_process_documents()
-    if documents is None:
-        return None
-        
+    
+    # Load or create vectorstore
     vector_store = load_or_create_vectorstore(documents, embeddings)
-    if vector_store is None:
-        return None
-        
     retriever = vector_store.as_retriever(search_kwargs={"k": 7})
 
+    # Setup prompt template
     prompt_template = """
-    You are a warm, helpful, and professional sales assistant specialized in furniture product details.
+    You are a warm, helpful, and professional sales assistant specialized in furniture product details in Mobica Factories.
     Use only the context below to answer the customer's question.
     If the context does not contain relevant information, respond with: "No relevant data found in the context."
 
@@ -142,6 +100,7 @@ def initialize_system():
         template=prompt_template
     )
 
+    # Initialize memory
     memory = ConversationBufferMemory(
         memory_key="chat_history",
         input_key="question",
@@ -149,10 +108,10 @@ def initialize_system():
         return_messages=True
     )
 
+    # Get cached LLM
     llm = get_llm()
-    if llm is None:
-        return None
 
+    # Create the ConversationalRetrievalChain
     qa_chain = ConversationalRetrievalChain.from_llm(
         llm=llm,
         retriever=retriever,
@@ -182,6 +141,7 @@ def main():
     st.title("🛋️ Multilingual Furniture Sales Assistant")
     st.write("Ask questions about our furniture products in English or Arabic!")
 
+    # Initialize session state
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
@@ -189,9 +149,6 @@ def main():
     with st.spinner("Loading the system..."):
         try:
             qa_chain = initialize_system()
-            if qa_chain is None:
-                st.error("Failed to initialize the system. Please check the logs.")
-                st.stop()
         except Exception as e:
             st.error(f"Error initializing system: {str(e)}")
             st.stop()
@@ -203,10 +160,12 @@ def main():
 
     # Chat input
     if prompt := st.chat_input("Ask about our furniture products..."):
+        # Display user message
         with st.chat_message("user"):
             st.write(prompt)
         st.session_state.messages.append({"role": "user", "content": prompt})
 
+        # Generate and display assistant response
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 try:
