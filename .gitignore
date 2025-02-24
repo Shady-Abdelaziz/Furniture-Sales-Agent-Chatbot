@@ -1,5 +1,0 @@
-.cache/
-data/*.pdf
-__pycache__/
-*.pyc
-.env
