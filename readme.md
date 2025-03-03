@@ -1,4 +1,4 @@
-# Sales Agent
+# Furniture Sales Agent
 
 A RAG-based chatbot for the Mobica Factories catalog. This project leverages advanced Retrieval-Augmented Generation (RAG) techniques using LangChain, FAISS, and Ollama's "aya-expanse:8b" model to deliver detailed and multilingual (English and Arabic) product information from the Mobica catalog.
 
